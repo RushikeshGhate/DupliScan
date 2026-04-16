@@ -571,3 +571,113 @@ dom.moveSelectedBtn.addEventListener('click', moveSelectedDuplicates);
 
 // Initial check
 checkBrowserSupport();
+
+// ============================================
+// Visitor Counter (free API, no signup needed)
+// ============================================
+const COUNTER_NAMESPACE = 'rushikeshghate-dupliscan';
+const COUNTER_KEY = 'visitors';
+
+/**
+ * Animated number counting effect
+ */
+function animateCounter(targetNumber) {
+    const counterEl = document.getElementById('visitorCount');
+    if (!counterEl) return;
+
+    const duration = 1200;
+    const start = 0;
+    const startTime = performance.now();
+
+    function update(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        
+        // Ease-out cubic for smooth deceleration
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const current = Math.round(start + (targetNumber - start) * eased);
+        
+        counterEl.textContent = current.toLocaleString();
+        counterEl.classList.add('animate');
+
+        if (progress < 1) {
+            requestAnimationFrame(update);
+        }
+    }
+
+    requestAnimationFrame(update);
+}
+
+/**
+ * Fetch and increment the visitor counter
+ * Uses CountAPI.xyz (free, no signup) with fallback
+ */
+async function initVisitorCounter() {
+    const counterEl = document.getElementById('visitorCount');
+    if (!counterEl) return;
+
+    // Check if this is a new session (don't count page refreshes)
+    const sessionKey = 'dupliscan_session_counted';
+    const alreadyCounted = sessionStorage.getItem(sessionKey);
+
+    try {
+        let count;
+        
+        if (!alreadyCounted) {
+            // New session — increment counter
+            const response = await fetch(
+                `https://api.countapi.xyz/hit/${COUNTER_NAMESPACE}/${COUNTER_KEY}`
+            );
+            
+            if (!response.ok) throw new Error('API unavailable');
+            
+            const data = await response.json();
+            count = data.value;
+            sessionStorage.setItem(sessionKey, 'true');
+        } else {
+            // Already counted this session — just fetch current value
+            const response = await fetch(
+                `https://api.countapi.xyz/get/${COUNTER_NAMESPACE}/${COUNTER_KEY}`
+            );
+            
+            if (!response.ok) throw new Error('API unavailable');
+            
+            const data = await response.json();
+            count = data.value;
+        }
+
+        if (count && count > 0) {
+            animateCounter(count);
+        } else {
+            // Counter might not exist yet, create it
+            const createResp = await fetch(
+                `https://api.countapi.xyz/create?namespace=${COUNTER_NAMESPACE}&key=${COUNTER_KEY}&value=1`
+            );
+            if (createResp.ok) {
+                animateCounter(1);
+                sessionStorage.setItem(sessionKey, 'true');
+            } else {
+                throw new Error('Could not create counter');
+            }
+        }
+    } catch (err) {
+        console.warn('Visitor counter fallback:', err.message);
+        
+        // Fallback: use localStorage to track visits locally
+        let localCount = parseInt(localStorage.getItem('dupliscan_local_visits') || '0');
+        if (!alreadyCounted) {
+            localCount++;
+            localStorage.setItem('dupliscan_local_visits', localCount.toString());
+            sessionStorage.setItem(sessionKey, 'true');
+        }
+        
+        if (localCount > 0) {
+            animateCounter(localCount);
+        } else {
+            counterEl.textContent = '—';
+        }
+    }
+}
+
+// Initialize the visitor counter on page load
+initVisitorCounter();

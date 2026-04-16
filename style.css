@@ -242,6 +242,80 @@ body {
 }
 
 /* ============================================
+   Visitor Counter
+   ============================================ */
+.visitor-counter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: rgba(139, 92, 246, 0.06);
+    border: 1px solid rgba(139, 92, 246, 0.15);
+    border-radius: 999px;
+    transition: all var(--transition-base);
+    cursor: default;
+    animation: counterFadeIn 1s ease 0.5s both;
+}
+
+.visitor-counter:hover {
+    background: rgba(139, 92, 246, 0.1);
+    border-color: rgba(139, 92, 246, 0.3);
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.1);
+    transform: translateY(-1px);
+}
+
+.counter-icon {
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.counter-content {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+}
+
+.counter-number {
+    font-size: 1.1rem;
+    font-weight: 800;
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    min-width: 24px;
+    text-align: center;
+    transition: all var(--transition-base);
+}
+
+.counter-label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+@keyframes counterFadeIn {
+    from { 
+        opacity: 0; 
+        transform: translateY(-8px) scale(0.9); 
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0) scale(1); 
+    }
+}
+
+@keyframes countUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.counter-number.animate {
+    animation: countUp 0.4s ease forwards;
+}
+
+/* ============================================
    Buttons
    ============================================ */
 .btn {
