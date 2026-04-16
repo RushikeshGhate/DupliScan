@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Find and remove duplicate images from any folder or drive. Content-based SHA-256 detection, not filename matching. 100% free, runs in your browser.">
+    <meta name="keywords" content="duplicate image finder, remove duplicate photos, find same images, duplicate file remover, free duplicate finder">
+    <meta name="author" content="DupliScan">
+    <meta name="theme-color" content="#0a0a0f">
+
+    <!-- Open Graph / Social Sharing -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="DupliScan — Free Duplicate Image Finder">
+    <meta property="og:description" content="Find and remove duplicate images by content, not filename. SHA-256 powered, 100% private, runs entirely in your browser.">
+    <meta property="og:image" content="https://dupliscan.netlify.app/og-image.png">
+    <meta property="og:url" content="https://dupliscan.netlify.app">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="DupliScan — Free Duplicate Image Finder">
+    <meta name="twitter:description" content="Scan any folder for duplicate images. Content-based detection, 100% free and private.">
+
+    <title>DupliScan — Free Duplicate Image Finder</title>
+
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Animated background -->
+    <div class="bg-gradient"></div>
+    <div class="bg-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                        <rect x="2" y="4" width="18" height="18" rx="3" stroke="url(#g1)" stroke-width="2.5"/>
+                        <rect x="12" y="10" width="18" height="18" rx="3" stroke="url(#g2)" stroke-width="2.5" opacity="0.6"/>
+                        <circle cx="10" cy="13" r="3" fill="url(#g1)"/>
+                        <path d="M2 18 L8 13 L14 17 L20 11" stroke="url(#g1)" stroke-width="2" stroke-linecap="round"/>
+                        <defs>
+                            <linearGradient id="g1" x1="0" y1="0" x2="20" y2="22">
+                                <stop stop-color="#8B5CF6"/>
+                                <stop offset="1" stop-color="#06B6D4"/>
+                            </linearGradient>
+                            <linearGradient id="g2" x1="12" y1="10" x2="30" y2="28">
+                                <stop stop-color="#F59E0B"/>
+                                <stop offset="1" stop-color="#EF4444"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+                <div>
+                    <h1>DupliScan</h1>
+                    <p class="tagline">Find &amp; Remove Duplicate Images</p>
+                </div>
+            </div>
+            <div class="header-stats" id="headerStats" style="display:none;">
+                <div class="stat-chip">
+                    <span class="stat-icon">📁</span>
+                    <span id="statFiles">0</span> images
+                </div>
+                <div class="stat-chip duplicate">
+                    <span class="stat-icon">🔄</span>
+                    <span id="statDuplicates">0</span> duplicates
+                </div>
+                <div class="stat-chip savings">
+                    <span class="stat-icon">💾</span>
+                    <span id="statSavings">0 MB</span> reclaimable
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main>
+            <!-- Landing / Folder Selection -->
+            <section class="landing-section" id="landingSection">
+                <div class="hero-card glass-card">
+                    <div class="hero-content">
+                        <h2>Scan any folder for duplicate images</h2>
+                        <p>Detects duplicates by <strong>image content</strong>, not filenames. Same photo with different names? We'll find it.</p>
+                        
+                        <div class="folder-actions">
+                            <button class="btn btn-primary btn-lg" id="selectFolderBtn">
+                                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                    <path d="M2 5C2 3.89543 2.89543 3 4 3H7.17157C7.70201 3 8.21071 3.21071 8.58579 3.58579L9.41421 4.41421C9.78929 4.78929 10.298 5 10.8284 5H16C17.1046 5 18 5.89543 18 7V15C18 16.1046 17.1046 17 16 17H4C2.89543 17 2 16.1046 2 15V5Z" stroke="currentColor" stroke-width="1.5"/>
+                                    <path d="M10 9V15M7 12H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                </svg>
+                                Select Folder to Scan
+                            </button>
+                        </div>
+
+                        <div class="features-grid">
+                            <div class="feature-item">
+                                <div class="feature-icon">🔬</div>
+                                <div>
+                                    <strong>Content-Based</strong>
+                                    <span>Compares actual image data using SHA-256 hashing</span>
+                                </div>
+                            </div>
+                            <div class="feature-item">
+                                <div class="feature-icon">⚡</div>
+                                <div>
+                                    <strong>Fast Scanning</strong>
+                                    <span>Size pre-filter skips non-matching files instantly</span>
+                                </div>
+                            </div>
+                            <div class="feature-item">
+                                <div class="feature-icon">🔒</div>
+                                <div>
+                                    <strong>100% Private</strong>
+                                    <span>Runs entirely in your browser — nothing is uploaded</span>
+                                </div>
+                            </div>
+                            <div class="feature-item">
+                                <div class="feature-icon">📂</div>
+                                <div>
+                                    <strong>Auto-Organize</strong>
+                                    <span>Moves duplicates to a separate folder for review</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Scanning Progress -->
+            <section class="scanning-section" id="scanningSection" style="display:none;">
+                <div class="glass-card scanning-card">
+                    <div class="scanning-animation">
+                        <div class="scan-ring"></div>
+                        <div class="scan-ring delay-1"></div>
+                        <div class="scan-ring delay-2"></div>
+                        <div class="scan-icon">🔍</div>
+                    </div>
+                    <h2 id="scanTitle">Scanning folder...</h2>
+                    <p id="scanSubtitle" class="scan-subtitle">Discovering image files</p>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <div class="progress-text">
+                            <span id="progressCount">0 / 0</span>
+                            <span id="progressPercent">0%</span>
+                        </div>
+                    </div>
+                    <div class="scan-log" id="scanLog"></div>
+                </div>
+            </section>
+
+            <!-- Results -->
+            <section class="results-section" id="resultsSection" style="display:none;">
+                <!-- Action Bar -->
+                <div class="action-bar glass-card">
+                    <div class="action-left">
+                        <button class="btn btn-secondary" id="scanAgainBtn">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M2 8C2 4.68629 4.68629 2 8 2C10.2208 2 12.1599 3.26399 13.1973 5.12132" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <path d="M14 8C14 11.3137 11.3137 14 8 14C5.77924 14 3.84009 12.736 2.80269 10.8787" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <path d="M13 2V5.5H9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M3 14V10.5H6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            Scan New Folder
+                        </button>
+                        <button class="btn btn-ghost" id="selectAllBtn">Select All Duplicates</button>
+                        <button class="btn btn-ghost" id="deselectAllBtn">Deselect All</button>
+                    </div>
+                    <div class="action-right">
+                        <span class="selected-count" id="selectedCount">0 selected</span>
+                        <button class="btn btn-danger" id="moveSelectedBtn" disabled>
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M2 4H14M5 4V3C5 2.44772 5.44772 2 6 2H10C10.5523 2 11 2.44772 11 3V4M13 4V13C13 13.5523 12.5523 14 12 14H4C3.44772 14 3 13.5523 3 13V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                            Move to Duplicates Folder
+                        </button>
+                    </div>
+                </div>
+
+                <!-- No Duplicates Message -->
+                <div class="no-duplicates glass-card" id="noDuplicates" style="display:none;">
+                    <div class="no-dup-icon">✨</div>
+                    <h2>No Duplicates Found!</h2>
+                    <p>Your folder is clean — no duplicate images detected.</p>
+                    <button class="btn btn-primary" id="scanAnotherBtn">Scan Another Folder</button>
+                </div>
+
+                <!-- Duplicate Groups -->
+                <div class="duplicate-groups" id="duplicateGroups"></div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>DupliScan runs entirely in your browser. Your files never leave your computer.</p>
+        </footer>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
