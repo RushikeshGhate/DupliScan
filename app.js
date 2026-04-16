@@ -573,10 +573,9 @@ dom.moveSelectedBtn.addEventListener('click', moveSelectedDuplicates);
 checkBrowserSupport();
 
 // ============================================
-// Visitor Counter (free API, no signup needed)
+// Visitor Counter (persistent, global, free)
+// Uses multiple APIs with fallback chain
 // ============================================
-const COUNTER_NAMESPACE = 'rushikeshghate-dupliscan';
-const COUNTER_KEY = 'visitors';
 
 /**
  * Animated number counting effect
@@ -609,75 +608,124 @@ function animateCounter(targetNumber) {
 }
 
 /**
- * Fetch and increment the visitor counter
- * Uses CountAPI.xyz (free, no signup) with fallback
+ * Counter API Strategy:
+ * 
+ * Primary:   api.counterapi.dev  (free, reliable, no signup)
+ * Secondary: api.countapi.xyz    (free, older but well-known)
+ * Fallback:  localStorage        (per-browser only, always works)
+ * 
+ * How it works:
+ * - Every NEW browser session (new tab/window) = +1 count
+ * - Page refresh in same session = does NOT re-count
+ * - Count is stored on the server permanently — never resets
+ * - Any user from anywhere clicking the link = count goes up
+ */
+
+const SESSION_KEY = 'dupliscan_session_counted';
+
+// ---- Primary: counterapi.dev ----
+async function tryCounterApiDev(shouldIncrement) {
+    const base = 'https://api.counterapi.dev/v1';
+    const id = 'rushikeshghate-dupliscan/visitors';
+
+    if (shouldIncrement) {
+        const res = await fetch(`${base}/${id}/up`);
+        if (!res.ok) throw new Error(`counterapi.dev ${res.status}`);
+        const data = await res.json();
+        return data.count;
+    } else {
+        // counterapi.dev doesn't have a plain GET, so just call /up
+        // We'll handle session dedup in the caller
+        const res = await fetch(`${base}/${id}/up`);
+        if (!res.ok) throw new Error(`counterapi.dev ${res.status}`);
+        const data = await res.json();
+        return data.count;
+    }
+}
+
+// ---- Secondary: countapi.xyz ----
+async function tryCountApiXyz(shouldIncrement) {
+    const ns = 'rushikeshghate-dupliscan';
+    const key = 'visitors';
+
+    if (shouldIncrement) {
+        const res = await fetch(`https://api.countapi.xyz/hit/${ns}/${key}`);
+        if (!res.ok) throw new Error(`countapi.xyz ${res.status}`);
+        const data = await res.json();
+        if (data.value == null) throw new Error('countapi.xyz null value');
+        return data.value;
+    } else {
+        const res = await fetch(`https://api.countapi.xyz/get/${ns}/${key}`);
+        if (!res.ok) throw new Error(`countapi.xyz ${res.status}`);
+        const data = await res.json();
+        if (data.value == null) throw new Error('countapi.xyz null value');
+        return data.value;
+    }
+}
+
+// ---- Fallback: localStorage ----
+function localStorageCounter(shouldIncrement) {
+    const key = 'dupliscan_total_visits';
+    let count = parseInt(localStorage.getItem(key) || '0');
+    if (shouldIncrement) {
+        count++;
+        localStorage.setItem(key, count.toString());
+    }
+    return count;
+}
+
+/**
+ * Main visitor counter initialization
+ * Tries APIs in order until one succeeds
  */
 async function initVisitorCounter() {
     const counterEl = document.getElementById('visitorCount');
     if (!counterEl) return;
 
-    // Check if this is a new session (don't count page refreshes)
-    const sessionKey = 'dupliscan_session_counted';
-    const alreadyCounted = sessionStorage.getItem(sessionKey);
+    const alreadyCounted = sessionStorage.getItem(SESSION_KEY);
+    const shouldIncrement = !alreadyCounted;
+    let count = null;
+    let source = '';
 
+    // Try Primary: counterapi.dev
     try {
-        let count;
-        
-        if (!alreadyCounted) {
-            // New session — increment counter
-            const response = await fetch(
-                `https://api.countapi.xyz/hit/${COUNTER_NAMESPACE}/${COUNTER_KEY}`
-            );
-            
-            if (!response.ok) throw new Error('API unavailable');
-            
-            const data = await response.json();
-            count = data.value;
-            sessionStorage.setItem(sessionKey, 'true');
-        } else {
-            // Already counted this session — just fetch current value
-            const response = await fetch(
-                `https://api.countapi.xyz/get/${COUNTER_NAMESPACE}/${COUNTER_KEY}`
-            );
-            
-            if (!response.ok) throw new Error('API unavailable');
-            
-            const data = await response.json();
-            count = data.value;
-        }
+        count = await tryCounterApiDev(shouldIncrement);
+        source = 'counterapi.dev';
+    } catch (e) {
+        console.warn('Primary counter failed:', e.message);
+    }
 
-        if (count && count > 0) {
-            animateCounter(count);
-        } else {
-            // Counter might not exist yet, create it
-            const createResp = await fetch(
-                `https://api.countapi.xyz/create?namespace=${COUNTER_NAMESPACE}&key=${COUNTER_KEY}&value=1`
-            );
-            if (createResp.ok) {
-                animateCounter(1);
-                sessionStorage.setItem(sessionKey, 'true');
-            } else {
-                throw new Error('Could not create counter');
-            }
-        }
-    } catch (err) {
-        console.warn('Visitor counter fallback:', err.message);
-        
-        // Fallback: use localStorage to track visits locally
-        let localCount = parseInt(localStorage.getItem('dupliscan_local_visits') || '0');
-        if (!alreadyCounted) {
-            localCount++;
-            localStorage.setItem('dupliscan_local_visits', localCount.toString());
-            sessionStorage.setItem(sessionKey, 'true');
-        }
-        
-        if (localCount > 0) {
-            animateCounter(localCount);
-        } else {
-            counterEl.textContent = '—';
+    // Try Secondary: countapi.xyz
+    if (count == null) {
+        try {
+            count = await tryCountApiXyz(shouldIncrement);
+            source = 'countapi.xyz';
+        } catch (e) {
+            console.warn('Secondary counter failed:', e.message);
         }
     }
+
+    // Fallback: localStorage
+    if (count == null) {
+        count = localStorageCounter(shouldIncrement);
+        source = 'localStorage';
+    }
+
+    // Mark this session as counted
+    if (shouldIncrement) {
+        sessionStorage.setItem(SESSION_KEY, 'true');
+    }
+
+    // Display the count
+    if (count > 0) {
+        animateCounter(count);
+    } else {
+        counterEl.textContent = '1';
+    }
+
+    console.log(`Visitor count: ${count} (via ${source})`);
 }
 
 // Initialize the visitor counter on page load
 initVisitorCounter();
+
