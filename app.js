@@ -1,32 +1,44 @@
 /**
- * DupliScan — Duplicate Image Finder
- * 
- * Uses the File System Access API to scan folders,
- * SHA-256 hashing for content-based duplicate detection,
- * and can move duplicates to a separate folder.
+ * DupliScan - Duplicate File Finder
+ *
+ * Scans folders with the File System Access API, filters supported extensions,
+ * groups by size first for speed, then hashes file content with SHA-256 to find
+ * true duplicates. Selected duplicates can be moved into a review folder.
  */
 
-// ============================================
-// State
-// ============================================
-const state = {
-    rootHandle: null,
-    images: [],           // { file, handle, path, size, hash, objectUrl }
-    duplicateGroups: [],   // [ [imageIndex, imageIndex, ...], ... ]
-    selectedIndices: new Set(),
-    scanning: false,
+const DEFAULT_EXTENSIONS = [
+    '.pdf',
+    '.txt',
+    '.doc',
+    '.docx',
+    '.xls',
+    '.xlsx',
+    '.ppt',
+    '.pptx',
+];
+
+const FILE_TYPE_META = {
+    '.pdf': { label: 'PDF', icon: 'PDF', accent: 'pdf' },
+    '.txt': { label: 'TXT', icon: 'TXT', accent: 'txt' },
+    '.doc': { label: 'DOC', icon: 'DOC', accent: 'doc' },
+    '.docx': { label: 'DOCX', icon: 'DOC', accent: 'doc' },
+    '.xls': { label: 'XLS', icon: 'XLS', accent: 'sheet' },
+    '.xlsx': { label: 'XLSX', icon: 'XLS', accent: 'sheet' },
+    '.ppt': { label: 'PPT', icon: 'PPT', accent: 'slide' },
+    '.pptx': { label: 'PPTX', icon: 'PPT', accent: 'slide' },
 };
 
-const IMAGE_EXTENSIONS = new Set([
-    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg',
-    '.tiff', '.tif', '.ico', '.avif', '.heic', '.heif'
-]);
+const state = {
+    rootHandle: null,
+    files: [],
+    duplicateGroups: [],
+    selectedIndices: new Set(),
+    scanning: false,
+    selectedExtensions: new Set(DEFAULT_EXTENSIONS),
+    totalMatchedFiles: 0,
+};
 
-// ============================================
-// DOM Refs
-// ============================================
 const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => document.querySelectorAll(sel);
 
 const dom = {
     landingSection: $('#landingSection'),
@@ -52,28 +64,28 @@ const dom = {
     moveSelectedBtn: $('#moveSelectedBtn'),
     selectedCount: $('#selectedCount'),
     toastContainer: $('#toastContainer'),
+    filterCheckboxes: Array.from(document.querySelectorAll('.filter-checkbox')),
 };
 
-// ============================================
-// Toast Notifications
-// ============================================
 function showToast(message, type = 'info', duration = 3500) {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
+    const icons = {
+        success: 'OK',
+        error: 'ERR',
+        info: 'INFO',
+        warning: 'WARN',
+    };
 
-    const icons = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' };
-    toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span><span>${message}</span>`;
-
+    toast.innerHTML = `<span>${icons[type] || 'INFO'}</span><span>${message}</span>`;
     dom.toastContainer.appendChild(toast);
+
     setTimeout(() => {
         toast.classList.add('toast-out');
         setTimeout(() => toast.remove(), 300);
     }, duration);
 }
 
-// ============================================
-// Section Switching
-// ============================================
 function showSection(section) {
     dom.landingSection.style.display = 'none';
     dom.scanningSection.style.display = 'none';
@@ -81,9 +93,6 @@ function showSection(section) {
     section.style.display = '';
 }
 
-// ============================================
-// Scan Log
-// ============================================
 function addLogEntry(text) {
     const entry = document.createElement('span');
     entry.className = 'log-entry';
@@ -91,7 +100,6 @@ function addLogEntry(text) {
     dom.scanLog.appendChild(entry);
     dom.scanLog.scrollTop = dom.scanLog.scrollHeight;
 
-    // Keep only last 50 entries
     while (dom.scanLog.children.length > 50) {
         dom.scanLog.removeChild(dom.scanLog.firstChild);
     }
@@ -99,198 +107,216 @@ function addLogEntry(text) {
 
 function updateProgress(current, total, label) {
     const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-    dom.progressFill.style.width = pct + '%';
+    dom.progressFill.style.width = `${pct}%`;
     dom.progressCount.textContent = `${current} / ${total}`;
-    dom.progressPercent.textContent = pct + '%';
-    if (label) dom.scanSubtitle.textContent = label;
+    dom.progressPercent.textContent = `${pct}%`;
+
+    if (label) {
+        dom.scanSubtitle.textContent = label;
+    }
 }
 
-// ============================================
-// File System Helpers
-// ============================================
-function isImageFile(name) {
-    const ext = '.' + name.split('.').pop().toLowerCase();
-    return IMAGE_EXTENSIONS.has(ext);
+function getExtension(name) {
+    const dotIndex = name.lastIndexOf('.');
+    return dotIndex === -1 ? '' : name.slice(dotIndex).toLowerCase();
 }
 
-/**
- * Recursively collect all image file handles from a directory
- */
-async function collectImages(dirHandle, path = '') {
+function getSelectedExtensions() {
+    return new Set(
+        dom.filterCheckboxes
+            .filter((checkbox) => checkbox.checked)
+            .map((checkbox) => checkbox.value.toLowerCase())
+    );
+}
+
+function isSupportedFile(name) {
+    return state.selectedExtensions.has(getExtension(name));
+}
+
+async function collectFiles(dirHandle, path = '') {
     const results = [];
-    
+
     try {
         for await (const [name, handle] of dirHandle.entries()) {
             const fullPath = path ? `${path}/${name}` : name;
-            
-            // Skip the Duplicates folder we create
+
             if (handle.kind === 'directory' && name === '_DupliScan_Duplicates') {
                 continue;
             }
-            
-            if (handle.kind === 'file' && isImageFile(name)) {
-                results.push({ handle, path: fullPath, name });
+
+            if (handle.kind === 'file' && isSupportedFile(name)) {
+                results.push({ handle, path: fullPath, name, extension: getExtension(name) });
             } else if (handle.kind === 'directory') {
                 try {
-                    const subResults = await collectImages(handle, fullPath);
+                    const subResults = await collectFiles(handle, fullPath);
                     results.push(...subResults);
                 } catch (err) {
-                    addLogEntry(`⚠ Skipping ${fullPath}: ${err.message}`);
+                    addLogEntry(`Skipping ${fullPath}: ${err.message}`);
                 }
             }
         }
     } catch (err) {
-        addLogEntry(`⚠ Error reading directory: ${err.message}`);
+        addLogEntry(`Error reading directory: ${err.message}`);
     }
-    
+
     return results;
 }
 
-/**
- * Compute SHA-256 hash of a file
- */
 async function hashFile(file) {
     const buffer = await file.arrayBuffer();
     const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashArray.map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/**
- * Create an object URL for image preview
- */
-function createPreviewUrl(file) {
-    return URL.createObjectURL(file);
+function formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+    return `${(bytes / 1073741824).toFixed(2)} GB`;
 }
 
-// ============================================
-// Scanning Pipeline
-// ============================================
+function getFileMeta(extension) {
+    return FILE_TYPE_META[extension] || { label: extension.replace('.', '').toUpperCase() || 'FILE', icon: 'FILE', accent: 'default' };
+}
+
 async function startScan() {
     if (state.scanning) return;
 
-    // Prompt user to pick a folder
+    state.selectedExtensions = getSelectedExtensions();
+    if (state.selectedExtensions.size === 0) {
+        showToast('Select at least one file type before scanning.', 'warning');
+        return;
+    }
+
     let dirHandle;
     try {
         dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-    } catch (err) {
-        // User cancelled
+    } catch {
         return;
     }
 
     state.rootHandle = dirHandle;
-    state.images = [];
+    state.files = [];
     state.duplicateGroups = [];
     state.selectedIndices.clear();
     state.scanning = true;
-
-    // Clean up old object URLs
-    revokeAllUrls();
+    state.totalMatchedFiles = 0;
 
     showSection(dom.scanningSection);
     dom.scanLog.innerHTML = '';
     dom.scanTitle.textContent = 'Scanning folder...';
-    updateProgress(0, 0, 'Discovering image files');
-    addLogEntry(`📂 Scanning: ${dirHandle.name}`);
+    updateProgress(0, 0, 'Discovering matching files');
+    addLogEntry(`Scanning: ${dirHandle.name}`);
+    addLogEntry(`Filters: ${Array.from(state.selectedExtensions).join(', ')}`);
 
-    // Phase 1: Discover files
-    const fileEntries = await collectImages(dirHandle);
-    const totalFiles = fileEntries.length;
-    addLogEntry(`Found ${totalFiles} image files`);
+    const fileEntries = await collectFiles(dirHandle);
+    state.totalMatchedFiles = fileEntries.length;
+    addLogEntry(`Found ${fileEntries.length} matching files`);
 
-    if (totalFiles === 0) {
+    if (fileEntries.length === 0) {
         state.scanning = false;
         showResults();
         return;
     }
 
-    // Phase 2: Hash files
-    dom.scanTitle.textContent = 'Analyzing images...';
-    updateProgress(0, totalFiles, 'Computing content hashes');
+    dom.scanTitle.textContent = 'Grouping files...';
+    updateProgress(0, fileEntries.length, 'Reading file sizes');
 
-    const hashMap = new Map(); // hash -> [indices]
-    
+    const sizeBuckets = new Map();
     for (let i = 0; i < fileEntries.length; i++) {
         const entry = fileEntries[i];
         try {
             const file = await entry.handle.getFile();
-            const hash = await hashFile(file);
-            const objectUrl = createPreviewUrl(file);
+            entry.file = file;
+            entry.size = file.size;
 
-            const imageData = {
-                file,
+            if (!sizeBuckets.has(file.size)) {
+                sizeBuckets.set(file.size, []);
+            }
+            sizeBuckets.get(file.size).push(entry);
+            updateProgress(i + 1, fileEntries.length, `Sizing: ${entry.name}`);
+        } catch (err) {
+            addLogEntry(`Error reading ${entry.path}: ${err.message}`);
+        }
+    }
+
+    const candidates = [];
+    for (const entries of sizeBuckets.values()) {
+        if (entries.length > 1) {
+            candidates.push(...entries);
+        }
+    }
+
+    addLogEntry(`${candidates.length} files need content hashing`);
+
+    if (candidates.length === 0) {
+        state.scanning = false;
+        showResults();
+        return;
+    }
+
+    dom.scanTitle.textContent = 'Analyzing files...';
+    updateProgress(0, candidates.length, 'Computing content hashes');
+
+    const hashMap = new Map();
+    for (let i = 0; i < candidates.length; i++) {
+        const entry = candidates[i];
+        try {
+            const hash = await hashFile(entry.file);
+            const fileData = {
+                file: entry.file,
                 handle: entry.handle,
                 path: entry.path,
                 name: entry.name,
-                size: file.size,
+                size: entry.size,
+                extension: entry.extension,
                 hash,
-                objectUrl,
             };
-            
-            const idx = state.images.length;
-            state.images.push(imageData);
+
+            const idx = state.files.length;
+            state.files.push(fileData);
 
             if (!hashMap.has(hash)) {
                 hashMap.set(hash, []);
             }
             hashMap.get(hash).push(idx);
 
-            // Update progress every file
-            updateProgress(i + 1, totalFiles, `Hashing: ${entry.name}`);
-            
-            if (i % 10 === 0) {
-                addLogEntry(`🔬 ${entry.path}`);
-            }
-
-            // Yield to UI every 5 files
-            if (i % 5 === 0) {
-                await new Promise(r => setTimeout(r, 0));
+            updateProgress(i + 1, candidates.length, `Hashing: ${entry.name}`);
+            if (i % 8 === 0) {
+                addLogEntry(`Hashing ${entry.path}`);
+                await new Promise((resolve) => setTimeout(resolve, 0));
             }
         } catch (err) {
-            addLogEntry(`⚠ Error: ${entry.path} - ${err.message}`);
+            addLogEntry(`Error hashing ${entry.path}: ${err.message}`);
         }
     }
 
-    // Phase 3: Find duplicate groups
     dom.scanTitle.textContent = 'Finding duplicates...';
-    
-    for (const [hash, indices] of hashMap.entries()) {
+    for (const indices of hashMap.values()) {
         if (indices.length > 1) {
             state.duplicateGroups.push(indices);
         }
     }
 
-    const dupCount = state.duplicateGroups.reduce((sum, g) => sum + g.length - 1, 0);
-    addLogEntry(`✅ Found ${state.duplicateGroups.length} groups with ${dupCount} duplicates`);
+    const duplicateCount = state.duplicateGroups.reduce((sum, group) => sum + group.length - 1, 0);
+    addLogEntry(`Done: ${state.duplicateGroups.length} groups, ${duplicateCount} duplicates`);
 
     state.scanning = false;
     showResults();
 }
 
-// ============================================
-// Results Display
-// ============================================
-function formatSize(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    return (bytes / 1073741824).toFixed(2) + ' GB';
-}
-
 function showResults() {
     showSection(dom.resultsSection);
 
-    // Stats
-    const totalImages = state.images.length;
-    const dupCount = state.duplicateGroups.reduce((sum, g) => sum + g.length - 1, 0);
-    const savingsBytes = state.duplicateGroups.reduce((sum, g) => {
-        // Sum of all duplicates excluding the first (original)
-        return sum + g.slice(1).reduce((s, idx) => s + state.images[idx].size, 0);
-    }, 0);
+    const duplicateCount = state.duplicateGroups.reduce((sum, group) => sum + group.length - 1, 0);
+    const savingsBytes = state.duplicateGroups.reduce((sum, group) => (
+        sum + group.slice(1).reduce((groupSum, idx) => groupSum + state.files[idx].size, 0)
+    ), 0);
 
     dom.headerStats.style.display = 'flex';
-    dom.statFiles.textContent = totalImages;
-    dom.statDuplicates.textContent = dupCount;
+    dom.statFiles.textContent = state.totalMatchedFiles;
+    dom.statDuplicates.textContent = duplicateCount;
     dom.statSavings.textContent = formatSize(savingsBytes);
 
     if (state.duplicateGroups.length === 0) {
@@ -306,7 +332,7 @@ function showResults() {
     dom.moveSelectedBtn.style.display = '';
     dom.selectAllBtn.style.display = '';
     dom.deselectAllBtn.style.display = '';
-    
+
     renderDuplicateGroups();
     updateSelectedCount();
 }
@@ -315,12 +341,10 @@ function renderDuplicateGroups() {
     dom.duplicateGroups.innerHTML = '';
 
     state.duplicateGroups.forEach((group, groupIdx) => {
+        const totalSize = group.reduce((sum, idx) => sum + state.files[idx].size, 0);
         const groupEl = document.createElement('div');
         groupEl.className = 'dup-group';
         groupEl.style.animationDelay = `${groupIdx * 0.08}s`;
-
-        const totalSize = group.reduce((s, idx) => s + state.images[idx].size, 0);
-
         groupEl.innerHTML = `
             <div class="dup-group-header">
                 <div class="dup-group-title">
@@ -329,65 +353,61 @@ function renderDuplicateGroups() {
                 </div>
                 <span class="dup-group-size">Total: ${formatSize(totalSize)}</span>
             </div>
-            <div class="dup-group-images" id="group-${groupIdx}"></div>
+            <div class="dup-group-files" id="group-${groupIdx}"></div>
         `;
 
         dom.duplicateGroups.appendChild(groupEl);
 
-        const imagesContainer = groupEl.querySelector(`#group-${groupIdx}`);
-
-        group.forEach((imgIdx, posInGroup) => {
-            const img = state.images[imgIdx];
-            const isOriginal = posInGroup === 0;
-            const isSelected = state.selectedIndices.has(imgIdx);
+        const filesContainer = groupEl.querySelector(`#group-${groupIdx}`);
+        group.forEach((fileIdx, position) => {
+            const file = state.files[fileIdx];
+            const fileMeta = getFileMeta(file.extension);
+            const isOriginal = position === 0;
+            const isSelected = state.selectedIndices.has(fileIdx);
 
             const card = document.createElement('div');
-            card.className = `image-card ${isOriginal ? 'original' : ''} ${isSelected ? 'selected' : ''}`;
-            card.dataset.imageIdx = imgIdx;
-
+            card.className = `file-card ${isOriginal ? 'original' : ''} ${isSelected ? 'selected' : ''}`;
+            card.dataset.fileIdx = fileIdx;
             card.innerHTML = `
-                ${!isOriginal ? `<div class="image-checkbox ${isSelected ? 'checked' : ''}" data-idx="${imgIdx}"></div>` : ''}
-                <img class="image-card-img" src="${img.objectUrl}" alt="${img.name}" loading="lazy" />
-                <div class="image-card-overlay"></div>
-                <div class="image-card-info">
-                    <div class="image-card-name" title="${img.path}">${img.name}</div>
-                    <div class="image-card-meta">
-                        <span class="image-card-size">${formatSize(img.size)}</span>
-                        <span class="image-card-tag ${isOriginal ? 'original' : 'duplicate'}">${isOriginal ? 'Keep' : 'Duplicate'}</span>
+                ${!isOriginal ? `<div class="file-checkbox ${isSelected ? 'checked' : ''}" data-idx="${fileIdx}"></div>` : ''}
+                <div class="file-card-top">
+                    <div class="file-badge ${fileMeta.accent}">${fileMeta.icon}</div>
+                    <div class="file-card-title-wrap">
+                        <div class="file-card-name" title="${file.path}">${file.name}</div>
+                        <div class="file-card-path" title="${file.path}">${file.path}</div>
                     </div>
+                </div>
+                <div class="file-card-meta">
+                    <span>${formatSize(file.size)}</span>
+                    <span>${fileMeta.label}</span>
+                    <span class="file-card-tag ${isOriginal ? 'original' : 'duplicate'}">${isOriginal ? 'Keep' : 'Duplicate'}</span>
                 </div>
             `;
 
-            // Click on card to toggle selection (if not original)
             if (!isOriginal) {
-                card.addEventListener('click', (e) => {
-                    if (e.target.closest('.image-checkbox') || e.target === card || e.target.closest('.image-card-info')) {
-                        toggleImageSelection(imgIdx, card);
+                card.addEventListener('click', (event) => {
+                    if (event.target.closest('.file-checkbox') || event.target === card || event.target.closest('.file-card-top') || event.target.closest('.file-card-meta')) {
+                        toggleFileSelection(fileIdx, card);
                     }
-                });
-
-                // Click on the image itself also toggles
-                const imgEl = card.querySelector('.image-card-img');
-                imgEl.addEventListener('click', () => {
-                    toggleImageSelection(imgIdx, card);
                 });
             }
 
-            imagesContainer.appendChild(card);
+            filesContainer.appendChild(card);
         });
     });
 }
 
-function toggleImageSelection(imgIdx, cardEl) {
-    if (state.selectedIndices.has(imgIdx)) {
-        state.selectedIndices.delete(imgIdx);
+function toggleFileSelection(fileIdx, cardEl) {
+    if (state.selectedIndices.has(fileIdx)) {
+        state.selectedIndices.delete(fileIdx);
         cardEl.classList.remove('selected');
-        cardEl.querySelector('.image-checkbox')?.classList.remove('checked');
+        cardEl.querySelector('.file-checkbox')?.classList.remove('checked');
     } else {
-        state.selectedIndices.add(imgIdx);
+        state.selectedIndices.add(fileIdx);
         cardEl.classList.add('selected');
-        cardEl.querySelector('.image-checkbox')?.classList.add('checked');
+        cardEl.querySelector('.file-checkbox')?.classList.add('checked');
     }
+
     updateSelectedCount();
 }
 
@@ -399,205 +419,131 @@ function updateSelectedCount() {
 
 function selectAllDuplicates() {
     state.selectedIndices.clear();
-    
-    state.duplicateGroups.forEach(group => {
-        // Skip first (original), select rest (duplicates)
-        group.slice(1).forEach(idx => state.selectedIndices.add(idx));
+    state.duplicateGroups.forEach((group) => {
+        group.slice(1).forEach((idx) => state.selectedIndices.add(idx));
     });
 
-    // Update UI
-    document.querySelectorAll('.image-card').forEach(card => {
-        const idx = parseInt(card.dataset.imageIdx);
+    document.querySelectorAll('.file-card').forEach((card) => {
+        const idx = Number(card.dataset.fileIdx);
         if (state.selectedIndices.has(idx)) {
             card.classList.add('selected');
-            card.querySelector('.image-checkbox')?.classList.add('checked');
+            card.querySelector('.file-checkbox')?.classList.add('checked');
         }
     });
 
     updateSelectedCount();
-    showToast(`Selected ${state.selectedIndices.size} duplicate images`, 'info');
+    showToast(`Selected ${state.selectedIndices.size} duplicate files`, 'info');
 }
 
 function deselectAll() {
     state.selectedIndices.clear();
-
-    document.querySelectorAll('.image-card.selected').forEach(card => {
+    document.querySelectorAll('.file-card.selected').forEach((card) => {
         card.classList.remove('selected');
-        card.querySelector('.image-checkbox')?.classList.remove('checked');
+        card.querySelector('.file-checkbox')?.classList.remove('checked');
     });
-
     updateSelectedCount();
 }
 
-// ============================================
-// Move Duplicates
-// ============================================
 async function moveSelectedDuplicates() {
-    if (state.selectedIndices.size === 0) return;
-    if (!state.rootHandle) {
-        showToast('No root folder available', 'error');
+    if (state.selectedIndices.size === 0 || !state.rootHandle) {
         return;
     }
 
-    const count = state.selectedIndices.size;
-    
     try {
-        // Create _DupliScan_Duplicates directory
         const dupDir = await state.rootHandle.getDirectoryHandle('_DupliScan_Duplicates', { create: true });
-
         let moved = 0;
         let failed = 0;
 
-        for (const imgIdx of state.selectedIndices) {
-            const img = state.images[imgIdx];
+        for (const fileIdx of state.selectedIndices) {
+            const fileEntry = state.files[fileIdx];
             try {
-                // Generate unique filename to avoid overwrites
-                let destName = img.name;
+                let destName = fileEntry.name;
                 let counter = 1;
+
                 while (true) {
                     try {
                         await dupDir.getFileHandle(destName);
-                        // File already exists, add counter
-                        const parts = img.name.split('.');
-                        const ext = parts.pop();
-                        destName = `${parts.join('.')}_${counter}.${ext}`;
+                        const dotIndex = fileEntry.name.lastIndexOf('.');
+                        const baseName = dotIndex === -1 ? fileEntry.name : fileEntry.name.slice(0, dotIndex);
+                        const ext = dotIndex === -1 ? '' : fileEntry.name.slice(dotIndex);
+                        destName = `${baseName}_${counter}${ext}`;
                         counter++;
                     } catch {
-                        break; // File doesn't exist, we can use this name
+                        break;
                     }
                 }
 
-                // Copy file to duplicates folder
-                const file = await img.handle.getFile();
                 const newHandle = await dupDir.getFileHandle(destName, { create: true });
                 const writable = await newHandle.createWritable();
-                await writable.write(await file.arrayBuffer());
+                await writable.write(await fileEntry.file.arrayBuffer());
                 await writable.close();
 
-                // Try to remove original
                 try {
-                    // Walk up the path to find parent directory
-                    const pathParts = img.path.split('/');
+                    const pathParts = fileEntry.path.split('/');
                     let parentHandle = state.rootHandle;
                     for (let i = 0; i < pathParts.length - 1; i++) {
                         parentHandle = await parentHandle.getDirectoryHandle(pathParts[i]);
                     }
-                    await parentHandle.removeEntry(img.name);
+                    await parentHandle.removeEntry(fileEntry.name);
                 } catch (removeErr) {
-                    // Couldn't remove original — it's still copied to duplicates folder
-                    addLogEntry(`⚠ Copied but couldn't remove original: ${img.path}`);
+                    addLogEntry(`Copied but could not remove original: ${fileEntry.path}`);
                 }
 
                 moved++;
             } catch (err) {
                 failed++;
-                console.error(`Failed to move ${img.path}:`, err);
+                addLogEntry(`Move failed: ${fileEntry.path} (${err.message})`);
             }
         }
 
         showToast(
-            `Moved ${moved} files to _DupliScan_Duplicates${failed > 0 ? ` (${failed} failed)` : ''}`,
-            failed > 0 ? 'warning' : 'success'
+            `Moved ${moved} files to _DupliScan_Duplicates${failed ? ` (${failed} failed)` : ''}`,
+            failed ? 'warning' : 'success'
         );
 
-        // Clear selections and re-scan
         if (moved > 0) {
             state.selectedIndices.clear();
-            // Re-scan the folder
             setTimeout(() => {
-                showSection(dom.landingSection);
-                dom.headerStats.style.display = 'none';
-                revokeAllUrls();
+                resetAndGoHome();
             }, 1500);
         }
-
     } catch (err) {
         showToast(`Error: ${err.message}`, 'error');
     }
 }
 
-// ============================================
-// Cleanup
-// ============================================
-function revokeAllUrls() {
-    state.images.forEach(img => {
-        if (img.objectUrl) {
-            URL.revokeObjectURL(img.objectUrl);
-        }
-    });
-}
-
 function resetAndGoHome() {
-    revokeAllUrls();
-    state.images = [];
+    state.files = [];
     state.duplicateGroups = [];
     state.selectedIndices.clear();
     state.rootHandle = null;
+    state.totalMatchedFiles = 0;
     dom.headerStats.style.display = 'none';
     showSection(dom.landingSection);
 }
 
-// ============================================
-// Feature Detection
-// ============================================
 function checkBrowserSupport() {
     if (!('showDirectoryPicker' in window)) {
         dom.selectFolderBtn.disabled = true;
         dom.selectFolderBtn.textContent = 'Not Supported in This Browser';
-        showToast('Please use Chrome, Edge, or Opera for folder access', 'error', 6000);
+        showToast('Please use Chrome, Edge, or Opera for folder access.', 'error', 6000);
         return false;
     }
+
     return true;
 }
 
-// ============================================
-// Event Listeners
-// ============================================
-dom.selectFolderBtn.addEventListener('click', () => {
-    if (checkBrowserSupport()) startScan();
-});
-
-dom.scanAgainBtn.addEventListener('click', () => {
-    resetAndGoHome();
-});
-
-dom.scanAnotherBtn?.addEventListener('click', () => {
-    resetAndGoHome();
-});
-
-dom.selectAllBtn.addEventListener('click', selectAllDuplicates);
-dom.deselectAllBtn.addEventListener('click', deselectAll);
-dom.moveSelectedBtn.addEventListener('click', moveSelectedDuplicates);
-
-// Initial check
-checkBrowserSupport();
-
-// ============================================
-// Visitor Counter (persistent, global, free)
-// Uses multiple APIs with fallback chain
-// ============================================
-
-/**
- * Animated number counting effect
- */
 function animateCounter(targetNumber) {
     const counterEl = document.getElementById('visitorCount');
     if (!counterEl) return;
 
     const duration = 1200;
-    const start = 0;
     const startTime = performance.now();
 
     function update(currentTime) {
-        const elapsed = currentTime - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        
-        // Ease-out cubic for smooth deceleration
+        const progress = Math.min((currentTime - startTime) / duration, 1);
         const eased = 1 - Math.pow(1 - progress, 3);
-        const current = Math.round(start + (targetNumber - start) * eased);
-        
-        counterEl.textContent = current.toLocaleString();
-        counterEl.classList.add('animate');
+        counterEl.textContent = Math.round(targetNumber * eased).toLocaleString();
 
         if (progress < 1) {
             requestAnimationFrame(update);
@@ -607,77 +553,43 @@ function animateCounter(targetNumber) {
     requestAnimationFrame(update);
 }
 
-/**
- * Counter API Strategy:
- * 
- * Primary:   api.counterapi.dev  (free, reliable, no signup)
- * Secondary: api.countapi.xyz    (free, older but well-known)
- * Fallback:  localStorage        (per-browser only, always works)
- * 
- * How it works:
- * - Every NEW browser session (new tab/window) = +1 count
- * - Page refresh in same session = does NOT re-count
- * - Count is stored on the server permanently — never resets
- * - Any user from anywhere clicking the link = count goes up
- */
-
 const SESSION_KEY = 'dupliscan_session_counted';
 
-// ---- Primary: counterapi.dev ----
 async function tryCounterApiDev(shouldIncrement) {
     const base = 'https://api.counterapi.dev/v1';
     const id = 'rushikeshghate-dupliscan/visitors';
-
-    if (shouldIncrement) {
-        const res = await fetch(`${base}/${id}/up`);
-        if (!res.ok) throw new Error(`counterapi.dev ${res.status}`);
-        const data = await res.json();
-        return data.count;
-    } else {
-        // counterapi.dev doesn't have a plain GET, so just call /up
-        // We'll handle session dedup in the caller
-        const res = await fetch(`${base}/${id}/up`);
-        if (!res.ok) throw new Error(`counterapi.dev ${res.status}`);
-        const data = await res.json();
-        return data.count;
-    }
+    const endpoint = shouldIncrement ? 'up' : 'up';
+    const res = await fetch(`${base}/${id}/${endpoint}`);
+    if (!res.ok) throw new Error(`counterapi.dev ${res.status}`);
+    const data = await res.json();
+    return data.count;
 }
 
-// ---- Secondary: countapi.xyz ----
 async function tryCountApiXyz(shouldIncrement) {
     const ns = 'rushikeshghate-dupliscan';
     const key = 'visitors';
-
-    if (shouldIncrement) {
-        const res = await fetch(`https://api.countapi.xyz/hit/${ns}/${key}`);
-        if (!res.ok) throw new Error(`countapi.xyz ${res.status}`);
-        const data = await res.json();
-        if (data.value == null) throw new Error('countapi.xyz null value');
-        return data.value;
-    } else {
-        const res = await fetch(`https://api.countapi.xyz/get/${ns}/${key}`);
-        if (!res.ok) throw new Error(`countapi.xyz ${res.status}`);
-        const data = await res.json();
-        if (data.value == null) throw new Error('countapi.xyz null value');
-        return data.value;
-    }
+    const url = shouldIncrement
+        ? `https://api.countapi.xyz/hit/${ns}/${key}`
+        : `https://api.countapi.xyz/get/${ns}/${key}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`countapi.xyz ${res.status}`);
+    const data = await res.json();
+    if (data.value == null) throw new Error('countapi.xyz null value');
+    return data.value;
 }
 
-// ---- Fallback: localStorage ----
 function localStorageCounter(shouldIncrement) {
     const key = 'dupliscan_total_visits';
-    let count = parseInt(localStorage.getItem(key) || '0');
+    let count = Number.parseInt(localStorage.getItem(key) || '0', 10);
+
     if (shouldIncrement) {
         count++;
-        localStorage.setItem(key, count.toString());
+        localStorage.setItem(key, String(count));
     }
+
     return count;
 }
 
-/**
- * Main visitor counter initialization
- * Tries APIs in order until one succeeds
- */
 async function initVisitorCounter() {
     const counterEl = document.getElementById('visitorCount');
     if (!counterEl) return;
@@ -685,47 +597,49 @@ async function initVisitorCounter() {
     const alreadyCounted = sessionStorage.getItem(SESSION_KEY);
     const shouldIncrement = !alreadyCounted;
     let count = null;
-    let source = '';
 
-    // Try Primary: counterapi.dev
     try {
         count = await tryCounterApiDev(shouldIncrement);
-        source = 'counterapi.dev';
-    } catch (e) {
-        console.warn('Primary counter failed:', e.message);
-    }
-
-    // Try Secondary: countapi.xyz
-    if (count == null) {
+    } catch {
         try {
             count = await tryCountApiXyz(shouldIncrement);
-            source = 'countapi.xyz';
-        } catch (e) {
-            console.warn('Secondary counter failed:', e.message);
+        } catch {
+            count = localStorageCounter(shouldIncrement);
         }
     }
 
-    // Fallback: localStorage
-    if (count == null) {
-        count = localStorageCounter(shouldIncrement);
-        source = 'localStorage';
-    }
-
-    // Mark this session as counted
     if (shouldIncrement) {
         sessionStorage.setItem(SESSION_KEY, 'true');
     }
 
-    // Display the count
     if (count > 0) {
         animateCounter(count);
     } else {
         counterEl.textContent = '1';
     }
-
-    console.log(`Visitor count: ${count} (via ${source})`);
 }
 
-// Initialize the visitor counter on page load
-initVisitorCounter();
+dom.filterCheckboxes.forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+        const checkedCount = dom.filterCheckboxes.filter((item) => item.checked).length;
+        if (checkedCount === 0) {
+            checkbox.checked = true;
+            showToast('At least one file type must stay selected.', 'warning');
+        }
+    });
+});
 
+dom.selectFolderBtn.addEventListener('click', () => {
+    if (checkBrowserSupport()) {
+        startScan();
+    }
+});
+
+dom.scanAgainBtn.addEventListener('click', resetAndGoHome);
+dom.scanAnotherBtn?.addEventListener('click', resetAndGoHome);
+dom.selectAllBtn.addEventListener('click', selectAllDuplicates);
+dom.deselectAllBtn.addEventListener('click', deselectAll);
+dom.moveSelectedBtn.addEventListener('click', moveSelectedDuplicates);
+
+checkBrowserSupport();
+initVisitorCounter();

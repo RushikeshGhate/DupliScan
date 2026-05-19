@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+preview.png
+playwright-preview.png
+fastapi-preview.png
+*-preview.png
